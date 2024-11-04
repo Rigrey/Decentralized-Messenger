@@ -1,7 +1,8 @@
 import argparse
 import asyncio
 import struct
-from struct import unpack
+
+# TODO: Continue Binary Protocol. Update for every command, nickname storage for client
 
 FORMAT = "<BH"
 
