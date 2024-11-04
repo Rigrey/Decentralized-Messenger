@@ -1,6 +1,23 @@
 import argparse
 import asyncio
-from turtledemo.clock import datum
+import struct
+from struct import unpack
+
+FORMAT = "<BH"
+
+def pack_message(command, message):
+    return struct.pack(FORMAT+f"{len(message)}s", command, len(message), message.strip().encode())
+
+def unpack_message(data):
+    format_size = struct.calcsize(FORMAT)
+    if len(data) < format_size:
+        return data.decode()
+    command, length = struct.unpack(FORMAT, data[:format_size])
+    if len(data) < format_size + length:
+        message = data[format_size:]
+    else:
+        message = struct.unpack(f"<{length}s", data[format_size:format_size + length])[0]
+    return message.decode()
 
 
 class ChatServer():
@@ -11,22 +28,24 @@ class ChatServer():
 
 
     async def handle_client(self, reader, writer):
-        nickname = (await reader.read(16)).decode().strip()
-        if nickname in self.clients.values():
-            writer.write("[ ! ] This nickname is already taken.".encode())
-            await writer.drain()
-        else:
-            self.clients[writer] = nickname
-            await self.broadcast(f"[ ! ] {nickname} joined the chat!")
-            try:
-                while True:
-                    data = await reader.read(4096)
-                    message = data.decode().strip()
-                    if not message or message == 'disconnect':
-                        break
-                    await self.broadcast(f"{nickname}: {message}")
-            finally:
-                await self.disconnect_client(writer)
+        while True:
+            nickname = unpack_message(await reader.read(struct.calcsize(FORMAT) + 16))
+            if nickname in self.clients.values():
+                writer.write(pack_message("[ ! ] This nickname is already taken."))
+                await writer.drain()
+            else:
+                self.clients[writer] = nickname
+                await self.broadcast(f"[ ! ] {nickname} joined the chat!")
+                try:
+                    while True:
+                        data = await reader.read(struct.calcsize(FORMAT) + 65535)
+                        message = unpack_message(data)
+                        if not message or message == 'disconnect':
+                            break
+                        await self.broadcast(f"{nickname}: {message}")
+                finally:
+                    await self.disconnect_client(writer)
+                    break
 
 
     async def disconnect_client(self, writer):
@@ -38,15 +57,13 @@ class ChatServer():
 
     async def broadcast(self, message):
         for writer in self.clients.keys():
-            writer.write(message.encode())
+            writer.write(pack_message(0, message))
             await writer.drain()
-
 
 
     async def start_server(self):
         server = await asyncio.start_server(self.handle_client, self.host, self.port)
         print(f"Server running on {self.host}:{self.port}")
-
         async with server:
             await server.serve_forever()
 

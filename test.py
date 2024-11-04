@@ -1,26 +1,22 @@
 import struct
-from struct import calcsize
 
 FORMAT = "<BH"
-def pack_message(message):
-    return struct.pack(FORMAT+f"{len(message)}s", 0, len(message), message.encode())
 
+def pack_message(message):
+    return struct.pack(FORMAT+f"{len(message)}s", 1, len(message), message.encode())
 
 def unpack_message(data):
-    if len(data) < calcsize(FORMAT):
+    format_size = struct.calcsize(FORMAT)
+    if len(data) < format_size:
         return data.decode()
-    identifier, length = struct.unpack(FORMAT, data[:calcsize(FORMAT)])
-    if len(data) < calcsize(FORMAT) + length:
-        message = data[calcsize(FORMAT):]
+    identifier, length = struct.unpack(FORMAT, data[:format_size])
+    if len(data) < format_size + length:
+        message = data[format_size:]
     else:
-        message = struct.unpack(f"<{length}s", data[calcsize(FORMAT):calcsize(FORMAT) + length])[0]
-    return message.decode('utf-8')
+        message = struct.unpack(f"<{length}s", data[format_size:format_size + length])[0]
+    return message.decode()
 
-
-
-base = pack_message("hello, my name is david, what's yours? are you good feeling this?")
-print(base)
-print(unpack_message(base))
-base1 = pack_message("hello")
-print(base1)
-print(unpack_message(base1))
+data = pack_message(65535*"a")
+print(data)
+size = struct.calcsize(FORMAT + f"{len(data)-struct.calcsize(FORMAT)}s")
+print(size)
