@@ -51,7 +51,7 @@ class ChatClient:
                 await self.unpack_message(data)
             except Exception as e:
                 print(f"Failed to receive message: {e}")
-                break
+                pass
 
     async def send_messages(self):
         while True:
