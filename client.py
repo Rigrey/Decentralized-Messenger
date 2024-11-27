@@ -53,15 +53,10 @@ class ChatClient:
 #FIXME: CHILD?
     async def start_connection(self):
         try:
-            print(1)
             if self.parent.host == 'localhost':
-                print(2)
                 await self.server_startup()
-                print(3)
                 await self.set_nickname()
-                print(4)
                 print(f"New person can join by this: {self.me}")
-                print(5)
             else:
                 self.me.reader, self.me.writer = await asyncio.open_connection(self.parent.host, self.parent.port)
                 await self.unpack_message(await self.me.reader.read(65538))
@@ -89,10 +84,11 @@ class ChatClient:
                     if child_data:
                         await self.unpack_message(child_data)
                         await self.broadcast_message(child_data, self.me.writer)
-                parent_data = await self.me.reader.read(65538)
-                if parent_data:
-                    await self.unpack_message(parent_data)
-                    await self.broadcast_message(parent_data, self.child.writer)
+                if self.me.reader:
+                    parent_data = await self.me.reader.read(65538)
+                    if parent_data:
+                        await self.unpack_message(parent_data)
+                        await self.broadcast_message(parent_data, self.child.writer)
             except Exception as e:
                 print(f"Failed to receive message: {e}")
                 pass
@@ -107,10 +103,18 @@ class ChatClient:
                 await self.broadcast_message(data_parent, self.me.writer)
                 break
             elif message.lower() == "new_connection":
-                data = await self.pack_message(4, "child"+str(self.me))
-                await self.broadcast_message(data, self.child.writer) #FIXME : NOT DONE YET. ADD THIS COMMAND TO COMMAND_HANDLER + ADD NEW FUNC
+                if not self.child:
+                    print(f"You can connect new user by this data: {message.split(';')[0]}")
+                    continue
+                data = await self.pack_message(4, str(self.me))
+                await self.broadcast_message(data, self.child.writer) # FIXME : NOT DONE YET. ADD THIS COMMAND TO COMMAND_HANDLER + ADD NEW FUNC
                 continue
-            await self.broadcast_message(0, message)
+            if self.me.writer or self.child:
+                data = await self.pack_message(4, message)
+            if self.me.writer:
+                await self.broadcast_message(data, self.me.writer)
+            if self.child:
+                await self.broadcast_message(data, self.child.writer)
 
     async def broadcast_message(self, data, writer):
         if writer:
@@ -174,17 +178,14 @@ class ChatClient:
             print(f"You can connect new user by this data: {message.split(';')[0]}")
 
     async def server_startup(self):
-        print(6)
         if not self.me.host:
-            print(7)
             raise Exception("Server can't be started!")
-        print(8)
         server = await asyncio.start_server(self.handle_connection, self.me.host, self.me.port)
-        print(9)
+        asyncio.create_task(self.run_server(server))
+
+    async def run_server(self, server):
         async with server:
-            print(10)
             await server.serve_forever()
-            print(11)
 
     async def handle_connection(self, reader, writer):
         try:
