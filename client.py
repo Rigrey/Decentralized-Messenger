@@ -53,14 +53,20 @@ class ChatClient:
 #FIXME: CHILD?
     async def start_connection(self):
         try:
+            print(2)
             if self.parent.host == 'localhost':
-                await self.server_startup()
                 await self.set_nickname()
+                await self.server_startup()
                 print(f"New person can join by this: {self.me}")
             else:
+                print(3)
                 self.me.reader, self.me.writer = await asyncio.open_connection(self.parent.host, self.parent.port)
+                print(4)
                 await self.unpack_message(await self.me.reader.read(65538))
+                print(5)
                 await self.set_nickname()
+                print(6)
+                await self.server_startup()
                 data = await self.pack_message(2, self.nickname)
                 await self.broadcast_message(data, self.me.writer)
             await asyncio.gather(
@@ -188,15 +194,20 @@ class ChatClient:
             await server.serve_forever()
 
     async def handle_connection(self, reader, writer):
+        print(10)
         try:
             if self.child:
                 writer.close()
                 await writer.closed()
                 raise Exception("This node has max amount of connections.")
             peer = writer.get_extra_info('peername')
+            print(11)
             self.child = User_Connection(peer[0], peer[1], reader, writer)
+            print(12)
             data = await self.pack_message(3, str(self.nicknames)[1:-1])
+            print(13)
             await self.broadcast_message(data, self.child.writer)
+            print(14)
         except Exception as e:
             print(f"Failed to handle new connection: {e}")
 
@@ -212,6 +223,6 @@ if __name__ == '__main__':
 
     server_host = args.server if args.cmd else input('Server host: ')
     server_port = args.port if args.cmd else input('Server port: ')
-
+    print(1)
     client = ChatClient(server_host, server_port)
     asyncio.run(client.start_connection())
