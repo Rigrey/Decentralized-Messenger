@@ -4,9 +4,9 @@ import struct
 import sys
 from enum import Enum
 from socket import AddressFamily, AF_INET, SOCK_STREAM, socket
-
 from psutil import net_if_addrs
-
+import queue
+from zlib import crc32
 
 def number_to_rgb(number):
     number = int(number)
@@ -51,7 +51,7 @@ class User_Connection:
     def __str__(self):
         return f"{self.host}:{self.port}"
 
-
+#TODO: Full decentralized connection with dictionary of "to" and "from" connections instead of parent, child
 class ChatClient:
     def __init__(self, server_host, server_port):
         self.parent = User_Connection(server_host, server_port)
@@ -67,6 +67,8 @@ class ChatClient:
             Command.GIVE_ID: self.get_id,
             Command.HANDLE_NEW_CONNECTION: self.handle_new_connection,
         }
+        self.history = queue.Queue(64)
+        self.passed_messages = set()
 
     async def start_connection(self):
         try:
@@ -142,10 +144,19 @@ class ChatClient:
             if not body_data:
                 break
             full_message = header + body_data
+            hashed_message = crc32(full_message)
+            if hashed_message in self.passed_messages:
+                break
             command, nickname, message = await self.unpack_message(full_message)
             await self.command_handlers[Command(command)](nickname, message)
+            if self.history.full():
+                deleted_item = self.history.get()
+                self.passed_messages.remove(deleted_item)
+            self.passed_messages.add(hashed_message)
+            self.history.put(hashed_message)
             if writer:
                 await self.send_message(full_message, writer)
+
             await asyncio.sleep(0)
 
     # TODO: DISCONNECT SHOULD GIVE INFO ABOUT CONNECTIONS
