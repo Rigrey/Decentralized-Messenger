@@ -184,6 +184,8 @@ class ChatClient:
                 continue
             if self.parent.writer or self.child:
                 data = await self.pack_message(Command.PRINT_MESSAGE.value, message)
+                self.history.put(crc32(data))
+                self.passed_messages.add(crc32(data))
             if self.parent.writer:
                 await self.send_message(data, self.parent.writer)
             if self.child:
