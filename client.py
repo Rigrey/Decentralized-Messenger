@@ -67,7 +67,7 @@ class ChatClient:
             Command.GIVE_ID: self.get_id,
             Command.HANDLE_NEW_CONNECTION: self.handle_new_connection,
         }
-        self.history = queue.Queue(64)
+        self.history = queue.Queue(maxsize=64)
         self.passed_messages = set()
 
     async def start_connection(self):
