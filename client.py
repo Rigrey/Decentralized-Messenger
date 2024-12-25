@@ -118,7 +118,6 @@ class ChatClient:
                 print(f"Failed to receive message: {e}")
                 pass
 
-    # FIXME: Problem with Russian.
     async def process_stream(self, reader, writer):
         while True:
             header = await asyncio.wait_for(reader.readexactly(struct.calcsize(self.header)), timeout=5)
@@ -165,7 +164,8 @@ class ChatClient:
 
     async def pack_message(self, command, message):
         message = message.strip()
-        return struct.pack(self.header + f"{len(self.nickname)}s{len(message.encode())}s", command, len(self.nickname) + len(message.encode()),
+        return struct.pack(self.header + f"{len(self.nickname)}s{len(message.encode())}s", command,
+                           len(self.nickname) + len(message.encode()),
                            len(self.nickname), self.nickname.encode(), message.encode())
 
     async def unpack_message(self, data):
