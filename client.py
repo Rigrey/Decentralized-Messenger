@@ -3,6 +3,9 @@ import asyncio
 import struct
 import sys
 from enum import Enum
+from socket import AddressFamily, AF_INET, SOCK_STREAM, socket
+
+from psutil import net_if_addrs
 
 
 def number_to_rgb(number):
@@ -14,18 +17,15 @@ def number_to_rgb(number):
 
 
 def find_free_port():
-    from socket import socket, AF_INET, SOCK_STREAM
     temp_socket = socket(AF_INET, SOCK_STREAM)
-    temp_socket.bind(('', 0))
+    temp_socket.bind(("", 0))
     port = temp_socket.getsockname()[1]
     temp_socket.close()
     return port
 
 
 def get_my_ip():
-    import psutil
-    from socket import AddressFamily
-    for interface, addrs in psutil.net_if_addrs().items():
+    for interface, addrs in net_if_addrs().items():
         if "Radmin VPN" in interface:  # I temporarily use Radmin VPN
             for addr in addrs:
                 if addr.family == AddressFamily.AF_INET:
@@ -57,7 +57,7 @@ class ChatClient:
         self.parent = User_Connection(server_host, server_port)
         self.me = User_Connection(get_my_ip(), find_free_port())
         self.child = None
-        self.nickname = ''
+        self.nickname = ""
         self.header = "<BHH"
         self.nicknames = set()
         self.command_handlers = {
@@ -72,30 +72,40 @@ class ChatClient:
         try:
             if self.parent.host is None:
                 await self.server_startup()
-                self.nickname = str(hash(str(self.me.host) + ":" + str(self.me.host)) % 10 ** 9)
+                self.nickname = str(
+                    hash(str(self.me.host) + ":" + str(self.me.host)) % 10**9
+                )
                 print(f"New person can join by this: {self.me}")
             else:
-                self.parent.reader, self.parent.writer = await asyncio.open_connection(self.parent.host,
-                                                                                       self.parent.port)
-                header = await asyncio.wait_for(self.parent.reader.readexactly(struct.calcsize(self.header)), timeout=5)
+                self.parent.reader, self.parent.writer = await asyncio.open_connection(
+                    self.parent.host, self.parent.port
+                )
+                header = await asyncio.wait_for(
+                    self.parent.reader.readexactly(struct.calcsize(self.header)),
+                    timeout=5,
+                )
                 if not header:
                     raise Exception("Connection failed on header part")
                 command, length, nickname_length = struct.unpack(self.header, header)
-                body_data = await asyncio.wait_for(self.parent.reader.readexactly(length), timeout=5)
+                body_data = await asyncio.wait_for(
+                    self.parent.reader.readexactly(length), timeout=5
+                )
                 if not body_data:
                     raise Exception("Connection on body part")
                 full_message = header + body_data
                 command, nickname, message = await self.unpack_message(full_message)
                 await self.command_handlers[Command(command)](nickname, message)
                 await self.server_startup()
-                data = await self.pack_message(Command.CONNECTED_MESSAGE.value, self.nickname)
+                data = await self.pack_message(
+                    Command.CONNECTED_MESSAGE.value, self.nickname
+                )
                 await self.send_message(data, self.parent.writer)
             await asyncio.gather(
                 self.receive_messages(),
                 self.process_input(),
             )
         except ConnectionError as e:
-            print(f'Connection failed: {e}')
+            print(f"Connection failed: {e}")
         finally:
             if self.parent.writer:
                 self.parent.writer.close()
@@ -109,7 +119,9 @@ class ChatClient:
                     await self.process_stream(self.child.reader, self.parent.writer)
 
                 if self.me and self.parent.reader:
-                    await self.process_stream(self.parent.reader, self.child.writer if self.child else None)
+                    await self.process_stream(
+                        self.parent.reader, self.child.writer if self.child else None
+                    )
 
                 await asyncio.sleep(0)
             except asyncio.TimeoutError:
@@ -120,7 +132,9 @@ class ChatClient:
 
     async def process_stream(self, reader, writer):
         while True:
-            header = await asyncio.wait_for(reader.readexactly(struct.calcsize(self.header)), timeout=5)
+            header = await asyncio.wait_for(
+                reader.readexactly(struct.calcsize(self.header)), timeout=5
+            )
             if not header:
                 break
             command, length, nickname_length = struct.unpack(self.header, header)
@@ -134,12 +148,17 @@ class ChatClient:
                 await self.send_message(full_message, writer)
             await asyncio.sleep(0)
 
+    # TODO: DISCONNECT SHOULD GIVE INFO ABOUT CONNECTIONS
     async def process_input(self):
         while True:
             message = await asyncio.to_thread(input)
-            if message.lower() == "!disconnect":  # TODO: THIS SHOULD GIVE INFO ABOUT CONNECTIONS
-                data_child = await self.pack_message(Command.DISCONNECTED_MESSAGE.value, f'{self.nickname};{self.me}')
-                data_parent = await self.pack_message(Command.DISCONNECTED_MESSAGE.value, self.nickname)
+            if message.lower() == "!disconnect":
+                data_child = await self.pack_message(
+                    Command.DISCONNECTED_MESSAGE.value, f"{self.nickname};{self.me}"
+                )
+                data_parent = await self.pack_message(
+                    Command.DISCONNECTED_MESSAGE.value, self.nickname
+                )
                 await self.send_message(data_child, self.child.writer)
                 await self.send_message(data_parent, self.parent.writer)
                 break
@@ -147,7 +166,9 @@ class ChatClient:
                 if not self.child:
                     print(f"You can connect new user by this data: {self.me}")
                     continue
-                data = await self.pack_message(Command.HANDLE_NEW_CONNECTION.value, str(self.me))
+                data = await self.pack_message(
+                    Command.HANDLE_NEW_CONNECTION.value, str(self.me)
+                )
                 await self.send_message(data, self.child.writer)
                 continue
             if self.parent.writer or self.child:
@@ -164,22 +185,31 @@ class ChatClient:
 
     async def pack_message(self, command, message):
         message = message.strip()
-        return struct.pack(self.header + f"{len(self.nickname)}s{len(message.encode())}s", command,
-                           len(self.nickname) + len(message.encode()),
-                           len(self.nickname), self.nickname.encode(), message.encode())
+        return struct.pack(
+            self.header + f"{len(self.nickname)}s{len(message.encode())}s",
+            command,
+            len(self.nickname) + len(message.encode()),
+            len(self.nickname),
+            self.nickname.encode(),
+            message.encode(),
+        )
 
     async def unpack_message(self, data):
         try:
             header_size = struct.calcsize(self.header)
             if len(data) < header_size:
                 raise ValueError("Incomplete message header")
-            command, data_length, nickname_length = struct.unpack(self.header, data[:header_size])
+            command, data_length, nickname_length = struct.unpack(
+                self.header, data[:header_size]
+            )
             if Command(int(command)) not in self.command_handlers:
                 raise ValueError("Unknown command received")
             if len(data[header_size:]) < data_length:
                 raise ValueError("Incomplete message payload")
             unpack_format = f"{nickname_length}s{data_length - nickname_length}s"
-            nickname, message = struct.unpack(unpack_format, data[header_size:header_size + data_length])
+            nickname, message = struct.unpack(
+                unpack_format, data[header_size : header_size + data_length]
+            )
             nickname = nickname.decode()
             message = message.decode()
             return int(command), nickname, message
@@ -202,15 +232,19 @@ class ChatClient:
 
     async def handle_new_connection(self, nickname, message):
         if not self.child:
-            data = await self.pack_message(Command.HANDLE_NEW_CONNECTION.value, f'{self.me};{message}')
+            data = await self.pack_message(
+                Command.HANDLE_NEW_CONNECTION.value, f"{self.me};{message}"
+            )
             await self.send_message(data, self.parent.writer)
-        elif message.split(';')[1] == str(self.me):
+        elif message.split(";")[1] == str(self.me):
             print(f"You can connect new user by this data: {message.split(';')[0]}")
 
     async def server_startup(self):
         if not self.me.host:
             raise Exception("Server can't be started!")
-        server = await asyncio.start_server(self.handle_connection, self.me.host, self.me.port)
+        server = await asyncio.start_server(
+            self.handle_connection, self.me.host, self.me.port
+        )
         asyncio.create_task(self.run_server(server))
 
     async def run_server(self, server):
@@ -223,25 +257,35 @@ class ChatClient:
                 writer.close()
                 await writer.closed()
                 raise Exception("This node has max amount of connections.")
-            peer = writer.get_extra_info('peername')
+            peer = writer.get_extra_info("peername")
             self.child = User_Connection(peer[0], peer[1], reader, writer)
-            data = await self.pack_message(Command.GIVE_ID.value,
-                                           str(hash(str(peer[0]) + ":" + str(peer[1])) % 10 ** 9))
+            data = await self.pack_message(
+                Command.GIVE_ID.value,
+                str(hash(str(peer[0]) + ":" + str(peer[1])) % 10**9),
+            )
             await self.send_message(data, self.child.writer)
         except Exception as e:
             print(f"Failed to handle new connection: {e}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description=' Client for temporarily (De)centralized Messenger'
+        description=" Client for temporarily (De)centralized Messenger"
     )
-    parser.add_argument('-c', '--cmd', type=bool, default=False, help='Run through command line with parameters')
-    parser.add_argument('-s', '--server', type=str, default=None, help='Server host')
-    parser.add_argument('-p', '--port', type=str, default=f'{find_free_port()}', help='Server port')
+    parser.add_argument(
+        "-c",
+        "--cmd",
+        type=bool,
+        default=False,
+        help="Run through command line with parameters",
+    )
+    parser.add_argument("-s", "--server", type=str, default=None, help="Server host")
+    parser.add_argument(
+        "-p", "--port", type=str, default=f"{find_free_port()}", help="Server port"
+    )
     args = parser.parse_args()
 
-    server_host = args.server if args.cmd else input('Server host: ')
-    server_port = args.port if args.cmd else input('Server port: ')
+    server_host = args.server if args.cmd else input("Server host: ")
+    server_port = args.port if args.cmd else input("Server port: ")
     client = ChatClient(server_host, server_port)
     asyncio.run(client.start_connection())
