@@ -38,10 +38,16 @@ def unpack_message(data):
 
 def pack_message(command, message):
     message = message.strip()
-    return struct.pack(header + f"{len(nickname)}s{len(message)}s", command, len(nickname + message), len(nickname), nickname.encode(), message.encode())
+    nick_len = len(nickname.encode())
+    mes_len = len(message.encode())
+    total_length = nick_len + mes_len
+    return struct.pack(header + f"{nick_len}s{mes_len}s", command, total_length, nick_len, nickname.encode(), message.encode())
 
-packed = pack_message(0, "you're gay")
+packed = pack_message(0, "thing")
+packed1 = pack_message(0, "штучка")
 print(packed)
-
+print(packed1)
 unpacked = unpack_message(packed)
+unpacked1 = unpack_message(packed1)
 print(unpacked)
+print(unpacked1)

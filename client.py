@@ -165,7 +165,7 @@ class ChatClient:
 
     async def pack_message(self, command, message):
         message = message.strip()
-        return struct.pack(self.header + f"{len(self.nickname)}s{len(message)}s", command, len(self.nickname + message),
+        return struct.pack(self.header + f"{len(self.nickname)}s{len(message.encode())}s", command, len(self.nickname) + len(message.encode()),
                            len(self.nickname), self.nickname.encode(), message.encode())
 
     async def unpack_message(self, data):
