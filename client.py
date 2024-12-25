@@ -8,6 +8,7 @@ from psutil import net_if_addrs
 import queue
 from zlib import crc32
 
+
 def number_to_rgb(number):
     number = int(number)
     r = (number * 123) % 256
@@ -51,7 +52,8 @@ class User_Connection:
     def __str__(self):
         return f"{self.host}:{self.port}"
 
-#TODO: Full decentralized connection with dictionary of "to" and "from" connections instead of parent, child
+
+# TODO: Full decentralized connection with dictionary of "to" and "from" connections instead of parent, child
 class ChatClient:
     def __init__(self, server_host, server_port):
         self.parent = User_Connection(server_host, server_port)
@@ -184,8 +186,12 @@ class ChatClient:
                 continue
             if self.parent.writer or self.child:
                 data = await self.pack_message(Command.PRINT_MESSAGE.value, message)
-                self.history.put(crc32(data))
-                self.passed_messages.add(crc32(data))
+                hashed_message = crc32(data)
+                if self.history.full():
+                    deleted_item = self.history.get()
+                    self.passed_messages.remove(deleted_item)
+                self.history.put(hashed_message)
+                self.passed_messages.add(hashed_message)
             if self.parent.writer:
                 await self.send_message(data, self.parent.writer)
             if self.child:
