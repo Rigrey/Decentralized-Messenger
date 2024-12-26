@@ -1,11 +1,11 @@
 import argparse
 import asyncio
+import queue
 import struct
 import sys
 from enum import Enum
 from socket import AddressFamily, AF_INET, SOCK_STREAM, socket
 from psutil import net_if_addrs
-import queue
 from zlib import crc32
 
 
@@ -42,7 +42,7 @@ class Command(Enum):
     HANDLE_NEW_CONNECTION = 4
 
 
-class User_Connection:
+class UserConnection:
     def __init__(self, host, port, reader=None, writer=None):
         self.host = host
         self.port = port
@@ -53,15 +53,13 @@ class User_Connection:
         return f"{self.host}:{self.port}"
 
 
-# TODO: Full decentralized connection with dictionary of "to" and "from" connections instead of parent, child
 class ChatClient:
     def __init__(self, server_host, server_port):
-        self.parent = User_Connection(server_host, server_port)
-        self.me = User_Connection(get_my_ip(), find_free_port())
-        self.child = None
+        self.left_node = UserConnection(server_host, server_port)
+        self.right_node = None
+        self.me = UserConnection(get_my_ip(), find_free_port())
         self.nickname = ""
         self.header = "<BHH"
-        self.nicknames = set()
         self.command_handlers = {
             Command.PRINT_MESSAGE: self.print_message,
             Command.DISCONNECTED_MESSAGE: self.disconnected_message,
@@ -71,39 +69,52 @@ class ChatClient:
         }
         self.history = queue.Queue(maxsize=64)
         self.passed_messages = set()
+        self.awaited_connection = set()
+        self.new_node = None
 
     async def start_connection(self):
         try:
-            if self.parent.host is None:
+            if self.left_node.host is None:
                 await self.server_startup()
-                self.nickname = str(
-                    hash(str(self.me.host) + ":" + str(self.me.host)) % 10**9
-                )
+                self.nickname = str(hash(str(self.me)) % 10**9)
                 print(f"New person can join by this: {self.me}")
+                self.left_node = self.me
+                self.right_node = self.me
             else:
-                self.parent.reader, self.parent.writer = await asyncio.open_connection(
-                    self.parent.host, self.parent.port
+                self.left_node.reader, self.left_node.writer = await asyncio.open_connection(
+                    self.left_node.host, self.left_node.port
                 )
                 header = await asyncio.wait_for(
-                    self.parent.reader.readexactly(struct.calcsize(self.header)),
+                    self.left_node.reader.readexactly(struct.calcsize(self.header)),
                     timeout=5,
                 )
                 if not header:
                     raise Exception("Connection failed on header part")
                 command, length, nickname_length = struct.unpack(self.header, header)
                 body_data = await asyncio.wait_for(
-                    self.parent.reader.readexactly(length), timeout=5
+                    self.left_node.reader.readexactly(length), timeout=5
                 )
                 if not body_data:
-                    raise Exception("Connection on body part")
+                    raise Exception("Connection failed on body part")
+                full_message = header + body_data
+                command, nickname, message = await self.unpack_message(full_message)
+                await self.command_handlers[Command(command)](nickname, message)
+                header = await asyncio.wait_for(
+                    self.left_node.reader.readexactly(struct.calcsize(self.header)),
+                    timeout=5,
+                )
+                if not header:
+                    raise Exception("Connection failed on header part")
+                command, length, nickname_length = struct.unpack(self.header, header)
+                body_data = await asyncio.wait_for(
+                    self.left_node.reader.readexactly(length), timeout=5
+                )
+                if not body_data:
+                    raise Exception("Connection failed on body part")
                 full_message = header + body_data
                 command, nickname, message = await self.unpack_message(full_message)
                 await self.command_handlers[Command(command)](nickname, message)
                 await self.server_startup()
-                data = await self.pack_message(
-                    Command.CONNECTED_MESSAGE.value, self.nickname
-                )
-                await self.send_message(data, self.parent.writer)
             await asyncio.gather(
                 self.receive_messages(),
                 self.process_input(),
@@ -111,20 +122,23 @@ class ChatClient:
         except ConnectionError as e:
             print(f"Connection failed: {e}")
         finally:
-            if self.parent.writer:
-                self.parent.writer.close()
-                await self.parent.writer.wait_closed()
+            if self.left_node and self.left_node.writer:
+                self.left_node.writer.close()
+                await self.left_node.writer.wait_closed()
+            if self.right_node and self.right_node.writer:
+                self.right_node.writer.close()
+                await self.right_node.writer.wait_closed()
             sys.exit(0)
 
     async def receive_messages(self):
         while True:
             try:
-                if self.child and self.child.reader:
-                    await self.process_stream(self.child.reader, self.parent.writer)
+                if self.right_node and self.right_node.reader:
+                    await self.process_stream(self.right_node.reader, self.left_node.writer)
 
-                if self.me and self.parent.reader:
+                if self.left_node and self.left_node.reader:
                     await self.process_stream(
-                        self.parent.reader, self.child.writer if self.child else None
+                        self.left_node.reader, self.right_node.writer if self.right_node else None
                     )
 
                 await asyncio.sleep(0)
@@ -151,6 +165,13 @@ class ChatClient:
                 break
             command, nickname, message = await self.unpack_message(full_message)
             await self.command_handlers[Command(command)](nickname, message)
+            if command == Command.HANDLE_NEW_CONNECTION:
+                if message[0] == "0":
+                    await self.send_message(full_message, self.left_node.writer)
+                    break
+                if message[0] == "1":
+                    await self.send_message(full_message, self.new_node.writer)
+                    break
             if self.history.full():
                 deleted_item = self.history.get()
                 self.passed_messages.remove(deleted_item)
@@ -161,30 +182,15 @@ class ChatClient:
 
             await asyncio.sleep(0)
 
-    # TODO: DISCONNECT SHOULD GIVE INFO ABOUT CONNECTIONS
     async def process_input(self):
         while True:
             message = await asyncio.to_thread(input)
             if message.lower() == "!disconnect":
-                data_child = await self.pack_message(
-                    Command.DISCONNECTED_MESSAGE.value, f"{self.nickname};{self.me}"
-                )
-                data_parent = await self.pack_message(
-                    Command.DISCONNECTED_MESSAGE.value, self.nickname
-                )
-                await self.send_message(data_child, self.child.writer)
-                await self.send_message(data_parent, self.parent.writer)
-                break
+                raise Exception("Disconnected")
             elif message.lower() == "!new_connection":
-                if not self.child:
-                    print(f"You can connect new user by this data: {self.me}")
-                    continue
-                data = await self.pack_message(
-                    Command.HANDLE_NEW_CONNECTION.value, str(self.me)
-                )
-                await self.send_message(data, self.child.writer)
+                print(f"You can connect new user by this data: {self.me}")
                 continue
-            if self.parent.writer or self.child:
+            if self.left_node.writer or self.right_node.writer:
                 data = await self.pack_message(Command.PRINT_MESSAGE.value, message)
                 hashed_message = crc32(data)
                 if self.history.full():
@@ -192,10 +198,10 @@ class ChatClient:
                     self.passed_messages.remove(deleted_item)
                 self.history.put(hashed_message)
                 self.passed_messages.add(hashed_message)
-            if self.parent.writer:
-                await self.send_message(data, self.parent.writer)
-            if self.child:
-                await self.send_message(data, self.child.writer)
+            if self.left_node.writer:
+                await self.send_message(data, self.left_node.writer)
+            if self.right_node.writer:
+                await self.send_message(data, self.right_node.writer)
 
     async def send_message(self, data, writer):
         if writer:
@@ -239,7 +245,6 @@ class ChatClient:
         r, g, b = number_to_rgb(nickname)
         print(f"\033[38;2;{r};{g};{b}m{nickname}\033[0m: {message}")
 
-    # TODO: Reconnection of users (child to parent)
     async def disconnected_message(self, nickname, message):
         print(f"[ ! ] {message} left the chat!")
 
@@ -250,13 +255,17 @@ class ChatClient:
         self.nickname = message
 
     async def handle_new_connection(self, nickname, message):
-        if not self.child:
-            data = await self.pack_message(
-                Command.HANDLE_NEW_CONNECTION.value, f"{self.me};{message}"
+        if not self.right_node:
+            right_host, right_port = message[1:].split(":")
+            right_reader, right_writer = await asyncio.open_connection(
+                right_host, right_port
             )
-            await self.send_message(data, self.parent.writer)
-        elif message.split(";")[1] == str(self.me):
-            print(f"You can connect new user by this data: {message.split(';')[0]}")
+            self.right_node = UserConnection(right_host, right_port, right_reader, right_writer)
+        else:
+            new_node_host, new_node_port = message[1:].split(":")
+            self.awaited_connection.add(new_node_host)
+            data = await self.pack_message(Command.HANDLE_NEW_CONNECTION, "1"+str(self.me))
+            await self.send_message(data, self.left_node.writer)
 
     async def server_startup(self):
         if not self.me.host:
@@ -272,24 +281,33 @@ class ChatClient:
 
     async def handle_connection(self, reader, writer):
         try:
-            if self.child:
-                writer.close()
-                await writer.closed()
-                raise Exception("This node has max amount of connections.")
             peer = writer.get_extra_info("peername")
-            self.child = User_Connection(peer[0], peer[1], reader, writer)
-            data = await self.pack_message(
-                Command.GIVE_ID.value,
-                str(hash(str(peer[0]) + ":" + str(peer[1])) % 10**9),
-            )
-            await self.send_message(data, self.child.writer)
+            new_node = UserConnection(peer[0], peer[1], reader, writer)
+
+            if self.right_node == self.me:
+                data = await self.pack_message(Command.HANDLE_NEW_CONNECTION.value, "1"+str(self.me))
+                self.awaited_connection.add(new_node.host)
+                await self.send_message(data, new_node.writer)
+                data = await self.pack_message(Command.GIVE_ID.value, str(hash(str(new_node)) % 10 ** 9))
+                await self.send_message(data, new_node.writer)
+                self.right_node = new_node
+            else:
+                if new_node.host not in self.awaited_connection:
+                    self.new_node = new_node
+                    data = await self.pack_message(Command.HANDLE_NEW_CONNECTION.value, "0"+str(new_node))
+                    await self.send_message(data, self.right_node.writer)
+                    data = await self.pack_message(Command.GIVE_ID.value, str(hash(str(new_node)) % 10**9))
+                    await self.send_message(data, new_node.writer)
+                    self.right_node = new_node
+                else:
+                    self.left_node = new_node
         except Exception as e:
             print(f"Failed to handle new connection: {e}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description=" Client for temporarily (De)centralized Messenger"
+        description="Client for temporarily (De)centralized Messenger"
     )
     parser.add_argument(
         "-c",
